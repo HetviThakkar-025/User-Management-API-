@@ -4,20 +4,30 @@ using System.Text.Json;
 namespace UserManagementAPI.Middleware;
 
 /// <summary>
-/// Global exception handling middleware.
-/// Copilot suggested this pattern to catch any unhandled exceptions that
-/// slip past controller-level try-catch blocks, preventing raw stack traces
-/// from being returned to clients.
+/// Global error-handling middleware — MUST be first in the pipeline.
+///
+/// Copilot prompt used: "Create middleware that catches unhandled exceptions and returns
+/// consistent JSON error responses in ASP.NET Core."
+///
+/// Copilot recommended:
+///  - Always setting Content-Type to application/json before writing the body
+///  - Hiding stack traces in Production to avoid leaking implementation details
+///  - Using a consistent envelope shape { error, statusCode, detail } across all failures
 /// </summary>
 public class GlobalExceptionMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly ILogger<GlobalExceptionMiddleware> _logger;
+    private readonly IHostEnvironment _env;
 
-    public GlobalExceptionMiddleware(RequestDelegate next, ILogger<GlobalExceptionMiddleware> logger)
+    public GlobalExceptionMiddleware(
+        RequestDelegate next,
+        ILogger<GlobalExceptionMiddleware> logger,
+        IHostEnvironment env)
     {
-        _next = next;
+        _next   = next;
         _logger = logger;
+        _env    = env;
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -28,32 +38,31 @@ public class GlobalExceptionMiddleware
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Unhandled exception caught by global middleware: {Message}", ex.Message);
-            await HandleExceptionAsync(context, ex);
+            _logger.LogError(ex, "Unhandled exception on {Method} {Path}: {Message}",
+                context.Request.Method, context.Request.Path, ex.Message);
+
+            await WriteErrorResponseAsync(context, ex);
         }
     }
 
-    private static async Task HandleExceptionAsync(HttpContext context, Exception exception)
+    private async Task WriteErrorResponseAsync(HttpContext context, Exception exception)
     {
         context.Response.ContentType = "application/json";
         context.Response.StatusCode  = (int)HttpStatusCode.InternalServerError;
 
-        var response = new
+        var body = new
         {
+            error      = "Internal server error.",
             statusCode = context.Response.StatusCode,
-            message    = "An internal server error occurred. Please try again later.",
-            // Only expose detail in Development — Copilot recommended this guard
-            detail = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") == "Development"
-                ? exception.Message
-                : null
+            // Copilot suggested only surfacing detail in Development
+            detail = _env.IsDevelopment() ? exception.Message : null
         };
 
-        var json = JsonSerializer.Serialize(response);
-        await context.Response.WriteAsync(json);
+        var options = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+        await context.Response.WriteAsync(JsonSerializer.Serialize(body, options));
     }
 }
 
-/// <summary>Extension method for clean registration in Program.cs.</summary>
 public static class GlobalExceptionMiddlewareExtensions
 {
     public static IApplicationBuilder UseGlobalExceptionHandler(this IApplicationBuilder app)

@@ -13,7 +13,32 @@ builder.Services.AddSwaggerGen(options =>
     {
         Title       = "UserManagementAPI",
         Version     = "v1",
-        Description = "User Management API for TechHive Solutions – debugged & optimized with Microsoft Copilot"
+        Description = "User Management API for TechHive Solutions – with logging, error-handling, and auth middleware"
+    });
+
+    // Copilot suggested adding a security definition so Swagger UI shows the
+    // Authorize button and passes the Bearer token automatically during testing.
+    options.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+    {
+        Name         = "Authorization",
+        Type         = Microsoft.OpenApi.Models.SecuritySchemeType.Http,
+        Scheme       = "bearer",
+        In           = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        Description  = "Enter your token. Example: hr-secret-token"
+    });
+    options.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
+    {
+        {
+            new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+            {
+                Reference = new Microsoft.OpenApi.Models.OpenApiReference
+                {
+                    Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
+                    Id   = "Bearer"
+                }
+            },
+            Array.Empty<string>()
+        }
     });
 
     var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
@@ -22,13 +47,22 @@ builder.Services.AddSwaggerGen(options =>
         options.IncludeXmlComments(xmlPath);
 });
 
-// ── App pipeline ──────────────────────────────────────────────────────────────
+// ── Middleware pipeline ───────────────────────────────────────────────────────
 var app = builder.Build();
 
-// Bug fix: Copilot recommended placing global exception middleware FIRST in the
-// pipeline so it wraps every subsequent middleware and catches all unhandled exceptions.
+// ┌─────────────────────────────────────────────────────────────────────────┐
+// │  MIDDLEWARE ORDER (as specified by TechHive Solutions requirements)     │
+// │                                                                         │
+// │  1. Error-handling   — outermost, wraps everything, catches all throws  │
+// │  2. Authentication   — rejects unauthorized before any logic runs       │
+// │  3. Request logging  — logs after auth so only valid requests are logged │
+// │  4. Routing / MVC    — actual endpoint handling                         │
+// └─────────────────────────────────────────────────────────────────────────┘
+
+// Step 1 – Error handling (must be first so it catches errors from all layers below)
 app.UseGlobalExceptionHandler();
 
+// Step 2 – Swagger (exempt from auth; served before authentication middleware)
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -39,8 +73,15 @@ if (app.Environment.IsDevelopment())
     });
 }
 
+// Step 3 – Token authentication
+app.UseTokenAuthentication();
+
+// Step 4 – Request/response logging
+app.UseRequestLogging();
+
 app.UseHttpsRedirection();
 app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
+
